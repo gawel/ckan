@@ -3,26 +3,36 @@
 # Exit immediately if any command fails
 set -e
 
+VAGRANT=0
+[ -d /vagrant ] && VAGRANT=1
+
 # Drop Travis' postgres cluster if we're building using a different pg version
 TRAVIS_PGVERSION='9.1'
-if [ $PGVERSION != $TRAVIS_PGVERSION ]
+if [ -z $PGVERSION ]
+then
+  export PGVERSION=$TRAVIS_PGVERSION
+fi
+if [ "$PGVERSION" != "$TRAVIS_PGVERSION" ]
 then
   sudo -u postgres pg_dropcluster --stop $TRAVIS_PGVERSION main
-  # Make psql use $PGVERSION
   export PGCLUSTER=$PGVERSION/main
 fi
 
 # Install postgres and solr
 sudo apt-get update -qq
-sudo apt-get install postgresql-$PGVERSION solr-jetty libcommons-fileupload-java:amd64=1.2.2-1
+sudo apt-get purge -y postgresql-8.4 postgresql-9.1 || true
+sudo apt-get install -y postgresql-$PGVERSION postgresql-server-dev-$PGVERSION
 
-if [ $PGVERSION == '8.4' ]
+ls /etc/init.d/jetty > /dev/null || sudo apt-get install -y solr-jetty libcommons-fileupload-java:amd64=1.2.2-1
+ls /usr/include/python* > /dev/null || sudo apt-get install -y python-dev
+which git > /dev/null || sudo apt-get install -y git-core
+
+if [ "$PGVERSION" == "8.4" ]
 then
-  # force postgres to use 5432 as it's port
-  sudo sed -i -e 's/port = 5433/port = 5432/g' /etc/postgresql/8.4/main/postgresql.conf
+    # force postgres to use 5432 as it's port
+    sudo sed -i -e 's/port = 5433/port = 5432/g' /etc/postgresql/8.4/main/postgresql.conf
+    sudo service postgresql restart
 fi
-
-sudo service postgresql restart
 
 # Setup postgres' users and databases
 sudo -u postgres psql -c "CREATE USER ckan_default WITH PASSWORD 'pass';"
@@ -30,14 +40,33 @@ sudo -u postgres psql -c "CREATE USER datastore_default WITH PASSWORD 'pass';"
 sudo -u postgres psql -c 'CREATE DATABASE ckan_test WITH OWNER ckan_default;'
 sudo -u postgres psql -c 'CREATE DATABASE datastore_test WITH OWNER ckan_default;'
 
+if [ $VAGRANT -eq 1 ]
+then
+    which mocha-phantomjs
+    if [ $? -ne 0 ]
+    then
+        wget http://nodejs.org/dist/v0.10.24/node-v0.10.24-linux-x64.tar.gz | tar xzf
+        sudo ln -s $HOME/node*/bin/* /usr/bin
+        sudo npm install -g mocha-phantomjs phantomjs
+    fi
+    which pip > /dev/null
+    if [ $? -ne 0 ]
+    then
+        sudo apt-get install -y python-virtualenv
+        virtualenv $HOME
+    fi
+    source $HOME/bin/activate
+    cd /vagrant
+else
+    npm install -g mocha-phantomjs phantomjs
+fi
+
+
 export PIP_USE_MIRRORS=true
 pip install -r requirements.txt
 pip install -r dev-requirements.txt
 
 python setup.py develop
-
-# Install npm dpes for mocha
-npm install -g mocha-phantomjs phantomjs
 
 paster db init -c test-core.ini
 
